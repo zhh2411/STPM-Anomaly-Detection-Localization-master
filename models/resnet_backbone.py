@@ -1,8 +1,25 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision.models.utils import load_state_dict_from_url
-from torchvision.models.resnet import model_urls, conv3x3, conv1x1, BasicBlock, Bottleneck
+from torch.hub import load_state_dict_from_url  # 更新导入
+from torchvision.models.resnet import ResNet, BasicBlock, Bottleneck  # 更新导入
+
+# 添加所需的 model_urls 字典
+model_urls = {
+    'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
+    'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
+    'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
+}
+
+# 添加必要的辅助函数
+def conv1x1(in_planes, out_planes, stride=1):
+    """1x1 convolution"""
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+
+def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
+    """3x3 convolution with padding"""
+    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
+                     padding=dilation, groups=groups, bias=False, dilation=dilation)
 
 class ModifiedResNet(nn.Module):
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False,
@@ -31,10 +48,6 @@ class ModifiedResNet(nn.Module):
                                        dilate=replace_stride_with_dilation[0])
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2,
                                        dilate=replace_stride_with_dilation[1])
-        # self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
-        #                                dilate=replace_stride_with_dilation[2])
-        # self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        # self.fc = nn.Linear(512 * block.expansion, num_classes)
         self.downscale = downscale
 
         for m in self.modules():
@@ -89,9 +102,7 @@ class ModifiedResNet(nn.Module):
 
     def forward(self, x):
         x1, x2, x3 = self._forward_impl(x)
-        
         return x1, x2, x3
-
 
 def modified_resnet(arch, block, layers, pretrained, progress, **kwargs):
     model = ModifiedResNet(block, layers, **kwargs)
@@ -101,10 +112,6 @@ def modified_resnet(arch, block, layers, pretrained, progress, **kwargs):
         model.load_state_dict(state_dict, strict=False)
     return model
 
-
 def modified_resnet18(pretrained=True, progress=True, **kwargs):
     return modified_resnet('resnet18', BasicBlock, [2, 2, 2, 2], pretrained, progress,
                    **kwargs)
-
-
-
