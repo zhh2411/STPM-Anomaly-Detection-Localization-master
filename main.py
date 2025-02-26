@@ -4,6 +4,7 @@ import time
 import numpy as np
 import torch
 from tqdm import tqdm
+import onnxruntime as ort
 from sklearn.metrics import precision_recall_curve
 from sklearn.metrics import roc_auc_score
 from torch.utils.tensorboard import SummaryWriter
@@ -29,6 +30,7 @@ class STPM():
         self.model_dir = args.model_dir
         self.img_dir = args.img_dir
         self.checkpoint_path = os.path.join(self.model_dir, 'checkpoint.pth')
+        self.onnx_path = os.path.join(self.model_dir, 'onnx')
         self.writer = SummaryWriter(log_dir=os.path.join(self.model_dir, 'logs'))  # 初始化 TensorBoard
 
         self.load_model()
@@ -157,18 +159,6 @@ class STPM():
         print('Testing')
         for (data, _, _) in tqdm(test_loader):  # 移除 label 和 mask
             test_imgs.extend(data.cpu().numpy())
-                # 可视化每张图像
-            # import matplotlib.pyplot as plt
-            # for i in range(data.shape[0]):  # 遍历batch中的每张图片
-            #     img = data[i].cpu().numpy()  # 获取单张图片并移到cpu上
-            #     img = img.transpose(1, 2, 0)  # 调整维度为 (height, width, channels)，适用于matplotlib
-
-            #     plt.figure(figsize=(6, 6))
-            #     plt.imshow(img)
-            #     plt.title(f"Image {i + 1}")
-            #     plt.axis('off')  # 关闭坐标轴显示
-            #     plt.show()
-
             data = data.to(self.device)
             with torch.no_grad():  # 使用更简洁的上下文管理
                 features_t = self.model_t(data)
@@ -191,6 +181,121 @@ class STPM():
             # 因为没有标签，gt_mask_list 和阈值传 None 或合适默认值
             plt_fig2(test_imgs, scores, img_scores, dummy_masks, 0.5, 0.5, 
                     self.img_dir, self.obj)
+            
+    def onnx_test(self):
+        onnx_student_path = os.path.join(self.onnx_path, f"{self.obj}_model_s.onnx")
+        
+        # 1️⃣ 检查ONNX模型文件是否存在，如果不存在，创建ONNX模型
+        if not os.path.exists(onnx_student_path):
+            print(f"ONNX 学生模型未能在以下文件夹找到 {onnx_student_path}, 创建中...")
+            # 加载PyTorch模型
+            try:
+                checkpoint = torch.load(self.checkpoint_path, map_location=torch.device('cpu'))
+                self.model_s.load_state_dict(checkpoint['model_state_dict'])
+            except Exception as e:
+                raise Exception(f'检查模型路径或文件格式: {e}')
+            self.model_s.eval()
+            
+            # 确保目录存在
+            os.makedirs(self.onnx_path, exist_ok=True)
+            
+            # 创建dummy输入进行导出
+            dummy_input = torch.randn(1, 3, self.img_cropsize, self.img_cropsize)
+            
+            # 导出ONNX模型
+            torch.onnx.export(
+                self.model_s,
+                dummy_input,
+                onnx_student_path,
+                export_params=True,
+                opset_version=12,
+                do_constant_folding=True,
+                input_names=['input'],
+                output_names=['output1', 'output2', 'output3'],  # 根据模型_s的输出调整
+                dynamic_axes={
+                    'input': {0: 'batch_size'},
+                    'output1': {0: 'batch_size'},
+                    'output2': {0: 'batch_size'},
+                    'output3': {0: 'batch_size'}
+                }
+            )
+            print(f"ONNX 学生模型创建在 {onnx_student_path}")
+        
+        # 同样为教师模型创建ONNX (如果需要)
+        onnx_teacher_path = os.path.join(self.onnx_path, f"{self.obj}_model_t.onnx")
+        if not os.path.exists(onnx_teacher_path) and hasattr(self, 'model_t'):
+            print(f"ONNX 老师模型未能在以下文件夹找到 {onnx_teacher_path}, 创建中...")
+            dummy_input = torch.randn(1, 3, self.img_cropsize, self.img_cropsize)
+            torch.onnx.export(
+                self.model_t,
+                dummy_input,
+                onnx_teacher_path,
+                export_params=True,
+                opset_version=12,
+                do_constant_folding=True,
+                input_names=['input'],
+                output_names=['output1', 'output2', 'output3'],  # 根据模型_t的输出调整
+                dynamic_axes={
+                    'input': {0: 'batch_size'},
+                    'output1': {0: 'batch_size'},
+                    'output2': {0: 'batch_size'},
+                    'output3': {0: 'batch_size'}
+                }
+            )
+            print(f"ONNX 老师模型创建在 {onnx_teacher_path}")
+        
+        # 2️⃣ 创建ONNX运行时会话
+        sess_options = ort.SessionOptions()
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        
+        # 创建推理会话
+        student_session = ort.InferenceSession(onnx_student_path, sess_options)
+        teacher_session = ort.InferenceSession(onnx_teacher_path, sess_options)
+        
+        # 3️⃣ 数据加载
+        kwargs = {'num_workers': 4, 'pin_memory': True} if torch.cuda.is_available() else {}
+        test_dataset = MVTecDataset(self.data_path, class_name=self.obj, is_train=False, 
+                                    resize=self.img_resize, cropsize=self.img_cropsize)
+        print(f"Dataset size: {len(test_dataset)}")
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=32, shuffle=False, **kwargs)
+        
+        # 4️⃣ 推理
+        scores = []
+        test_imgs = []
+        
+        print('Testing with ONNX runtime')
+        for (data, _, _) in tqdm(test_loader):
+            test_imgs.extend(data.cpu().numpy())
+            # 转换为ONNX需要的格式
+            data_numpy = data.numpy()
+            
+            # 获取输入名称
+            input_name = student_session.get_inputs()[0].name
+            
+            # 学生模型推理
+            student_outputs = student_session.run(None, {input_name: data_numpy})
+            
+            # 教师模型推理
+            teacher_outputs = teacher_session.run(None, {input_name: data_numpy})
+            
+            # 得分计算
+            score = cal_anomaly_maps(student_outputs, teacher_outputs, self.img_cropsize, is_numpy=True)
+            scores.extend(score)
+        
+        # 5️⃣ 异常分数归一化
+        scores = np.asarray(scores)
+        max_anomaly_score = scores.max()
+        min_anomaly_score = scores.min()
+        scores = (scores - min_anomaly_score) / (max_anomaly_score - min_anomaly_score + 1e-8)
+        
+        # 6️⃣ 图像级分数提取
+        img_scores = scores.reshape(scores.shape[0], -1).max(axis=1)
+        
+        # 7️⃣ 可视化
+        if self.vis:
+            dummy_masks = [np.zeros_like(scores[i]) for i in range(len(scores))]
+            plt_fig2(test_imgs, scores, img_scores, dummy_masks, 0.5, 0.5, 
+                    self.img_dir, self.obj)
 
 
 def get_args():
@@ -200,7 +305,7 @@ def get_args():
     parser.add_argument('--obj', type=str, default='zipper')
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--img_resize', type=int, default=256)
-    parser.add_argument('--img_cropsize', type=int, default=224)
+    parser.add_argument('--img_cropsize', type=int, default=256) # 不进行裁切
     parser.add_argument('--validation_ratio', type=float, default=0.2)
     parser.add_argument('--num_epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=0.4)
@@ -234,8 +339,10 @@ if __name__ == '__main__':
         stpm.test()
     elif args.phase == 'test':
         stpm.test()
+    elif args.phase == 'onnx':
+        stpm.onnx_test()
     else:
-        print('Phase argument must be train or test.')
+        print('找不到处理方法')
 
 
 

@@ -1,0 +1,16 @@
+.DS_Store
+*.pyc
+__pycache__/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.env
+*.pth
+*.pt
+*.ckpt
+*.img
+*.png
+*.onnx
+events.out.tfevents.*
