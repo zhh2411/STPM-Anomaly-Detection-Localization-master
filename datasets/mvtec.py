@@ -1,9 +1,11 @@
 import os
-from PIL import Image
 import torch
 from torch.utils.data import Dataset
-from torchvision import transforms as T
+from PIL import Image
 from functools import lru_cache
+import torchvision.transforms as T
+import numpy as np
+import concurrent.futures  # For parallel processing
 
 
 # URL = 'ftp://guest:GU.205dldo@ftp.softronics.ch/mvtec_anomaly_detection/mvtec_anomaly_detection.tar.xz'
@@ -11,6 +13,7 @@ CLASS_NAMES = ['bottle', 'cable', 'capsule', 'carpet', 'grid',
                'hazelnut', 'leather', 'metal_nut', 'pill', 'screw',
                'tile', 'toothbrush', 'transistor', 'wood', 'zipper', 'coffee']
 
+# Efficient Letterbox resize (use cached transformation)
 class LetterboxResize:
     def __init__(self, size, fill=128):
         self.size = size
@@ -35,13 +38,12 @@ class MVTecDataset(Dataset):
         self.resize = resize
         self.cropsize = cropsize
 
-        # 加载数据路径
+        # Load dataset paths
         self.x, self.y, self.mask = self.load_dataset_folder()
 
-        # 定义变换
+        # Define transformations
         self.transform_x = T.Compose([
             LetterboxResize(self.resize),
-            # T.CenterCrop(self.cropsize),
             T.ToTensor(),
             T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
@@ -52,37 +54,46 @@ class MVTecDataset(Dataset):
             T.ToTensor()
         ])
 
-        # 初始化缓存 (限制大小)
+        # Initialize cache with a limited size
         self.cache = {}
         self.transform_cache_size = 128
 
-    @lru_cache(maxsize=256)  # 使用路径作为缓存键，避免重复 I/O
+    @lru_cache(maxsize=512)  # Increased cache size for better caching of image loading
     def _load_image(self, path):
         return Image.open(path).convert('RGB')
 
-    @lru_cache(maxsize=256)  # 可选：如果需要缓存 mask 加载
+    @lru_cache(maxsize=512)  # Increased cache size for mask loading (optional)
     def _load_mask(self, path):
         return Image.open(path) if path else None
 
+    def _process_image(self, x_path):
+        x = self._load_image(x_path)
+        return self.transform_x(x)
+
+    def _process_mask(self, mask_path):
+        if mask_path:
+            mask = self._load_mask(mask_path)
+            return self.transform_mask(mask)
+        else:
+            return torch.zeros([1, self.cropsize, self.cropsize])
+
     def __getitem__(self, idx):
-        # 优先检查缓存
+        # Check cache first
         if idx in self.cache:
             return self.cache[idx]
 
         x_path, y, mask_path = self.x[idx], self.y[idx], self.mask[idx]
 
-        # 加载并变换图像 (用缓存的 _load_image 加速)
-        x = self._load_image(x_path)
-        x = self.transform_x(x)
+        # Using parallel processing to load and transform images and masks
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            # Load image and mask in parallel
+            future_x = executor.submit(self._process_image, x_path)
+            future_mask = executor.submit(self._process_mask, mask_path)
 
-        # 处理 mask
-        if mask_path:
-            mask = self._load_mask(mask_path)
-            mask = self.transform_mask(mask)
-        else:
-            mask = torch.zeros([1, self.cropsize, self.cropsize])
+            x = future_x.result()
+            mask = future_mask.result()
 
-        # 缓存处理结果 (限制缓存大小)
+        # Cache results if cache size is not exceeded
         if len(self.cache) < self.transform_cache_size:
             self.cache[idx] = (x, y, mask)
 
@@ -108,11 +119,8 @@ class MVTecDataset(Dataset):
                                  for f in os.listdir(img_type_dir)
                                  if f.endswith(('.jpg', '.png'))])
             x.extend(img_fpaths)
-            y.extend([0] * len(img_fpaths))      # 无标签时为正常样本
-            mask.extend([None] * len(img_fpaths))  # 无标签时填 None
+            y.extend([0] * len(img_fpaths))      # No label for normal samples
+            mask.extend([None] * len(img_fpaths))  # No label for normal samples
 
-        assert len(x) == len(y), 'number of x and y should be same'
+        assert len(x) == len(y), 'number of x and y should be the same'
         return x, y, mask
-
-
-
