@@ -138,10 +138,10 @@ class STPM():
     def test(self):
         # 1️⃣ 模型加载
         try:
-            checkpoint = torch.load(os.path.join(self.model_dir, 'model_s.pth'), map_location=torch.device('cpu'))
-        except:
-            raise Exception('Check saved model path.')
-        self.model_s.load_state_dict(checkpoint['model'])
+            checkpoint = torch.load(self.checkpoint_path, map_location=torch.device('cpu'))
+            self.model_s.load_state_dict(checkpoint['model_state_dict'])
+        except Exception as e:
+            raise Exception(f'检查模型路径或文件格式: {e}')
         self.model_s.eval()
 
         # 2️⃣ 数据加载
@@ -180,7 +180,7 @@ class STPM():
         scores = np.asarray(scores)
         max_anomaly_score = scores.max()
         min_anomaly_score = scores.min()
-        scores = (scores - min_anomaly_score) / (max_anomaly_score - min_anomaly_score)
+        scores = (scores - min_anomaly_score) / (max_anomaly_score - min_anomaly_score + 1e-8)
 
         # 4️⃣ 图像级分数提取
         img_scores = scores.reshape(scores.shape[0], -1).max(axis=1)
