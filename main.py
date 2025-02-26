@@ -198,6 +198,7 @@ def get_args():
     parser.add_argument('--phase', default='train')
     parser.add_argument("--data_path", type=str, default=r"C:\modelproject\COMPUTERVISION\anodet\anodet\data\mvtec_dataset")
     parser.add_argument('--obj', type=str, default='zipper')
+    parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--img_resize', type=int, default=256)
     parser.add_argument('--img_cropsize', type=int, default=224)
     parser.add_argument('--validation_ratio', type=float, default=0.2)
@@ -219,8 +220,8 @@ if __name__ == '__main__':
 
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    device = torch.device("cpu")
-    args.device = device
+    # device = torch.device("cpu")
+    # args.device = device
 
     args.model_dir = args.save_path + '/models' + '/' + args.obj
     args.img_dir = args.save_path + '/imgs' + '/' + args.obj
