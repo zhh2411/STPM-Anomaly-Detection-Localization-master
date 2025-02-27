@@ -1,7 +1,7 @@
-import torch
+import cv2
 import torch.nn.functional as F
 import numpy as np
-from scipy.ndimage import gaussian_filter
+# from scipy.ndimage import gaussian_filter
 
 
 def cal_loss(fs_list, ft_list):
@@ -56,10 +56,7 @@ def cal_anomaly_maps(fs_list, ft_list, out_size, is_numpy=False):
         # Convert to numpy for further processing
         anomaly_map = anomaly_map.squeeze().cpu().numpy()
         
-    else:
-        # NumPy implementation (for ONNX)
-        import cv2
-        
+    else:       
         anomaly_map = 0
         batch_size = fs_list[0].shape[0]
         
@@ -98,7 +95,8 @@ def cal_anomaly_maps(fs_list, ft_list, out_size, is_numpy=False):
     
     # Apply Gaussian filter to each image in the batch
     for i in range(anomaly_map.shape[0]):
-        anomaly_map[i] = gaussian_filter(anomaly_map[i], sigma=4)
+        # anomaly_map[i] = gaussian_filter(anomaly_map[i], sigma=4)
+        anomaly_map[i] = cv2.GaussianBlur(anomaly_map[i], ksize=(0, 0), sigmaX=4, sigmaY=4)
     
     return anomaly_map
 
