@@ -36,11 +36,7 @@ def cal_anomaly_maps(fs_list, ft_list, out_size, is_numpy=False):
         Anomaly maps (numpy array)
     """
     
-    if not is_numpy:
-        # PyTorch tensor implementation
-        import torch
-        import torch.nn.functional as F
-        
+    if not is_numpy:        
         anomaly_map = 0
         for i in range(len(ft_list)):
             fs = fs_list[i]
