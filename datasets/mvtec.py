@@ -49,8 +49,7 @@ class MVTecDataset(Dataset):
         ])
 
         self.transform_mask = T.Compose([
-            T.Resize(self.resize, Image.Resampling.LANCZOS),
-            T.CenterCrop(self.cropsize),
+            LetterboxResize(self.resize),
             T.ToTensor()
         ])
 

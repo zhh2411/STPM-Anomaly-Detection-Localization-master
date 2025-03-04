@@ -281,7 +281,7 @@ class STPM():
             # 得分计算
             score = cal_anomaly_maps(student_outputs, teacher_outputs, self.img_cropsize, is_numpy=True)
             scores.extend(score)
-        
+
         # 5️⃣ 异常分数归一化
         scores = np.asarray(scores)
         max_anomaly_score = scores.max()
@@ -290,7 +290,7 @@ class STPM():
         
         # 6️⃣ 图像级分数提取
         img_scores = scores.reshape(scores.shape[0], -1).max(axis=1)
-        
+        print(img_scores)
         # 7️⃣ 可视化
         if self.vis:
             dummy_masks = [np.zeros_like(scores[i]) for i in range(len(scores))]

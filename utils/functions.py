@@ -1,6 +1,7 @@
 import cv2
 import torch.nn.functional as F
 import numpy as np
+from PIL import Image
 # from scipy.ndimage import gaussian_filter
 
 
@@ -20,7 +21,7 @@ def cal_loss(fs_list, ft_list):
     return t_loss / N
 
 
-def cal_anomaly_maps(fs_list, ft_list, out_size, is_numpy=False):
+def cal_anomaly_maps(fs_list, ft_list, out_size, mask_path=r'mask\resized_binary_mask.png' , is_numpy=False):
     """
     Unified function to calculate anomaly maps that works with either:
     - PyTorch tensors (from original model)
@@ -35,7 +36,19 @@ def cal_anomaly_maps(fs_list, ft_list, out_size, is_numpy=False):
     Returns:
         Anomaly maps (numpy array)
     """
-    
+    def load_and_process_mask(image_path):
+    # 1. 读取图像
+        mask_pil = Image.open(image_path).convert('L')  # 转为灰度
+        
+        # 3. 转换为 NumPy 数组
+        mask_np = np.array(mask_pil, dtype=np.uint8)
+        
+        # 4. 归一化：将 255 变为 1，0 仍然是 0
+        mask_np = (mask_np > 128).astype(np.uint8)  # 二值化处理
+
+        return mask_np
+    mask = load_and_process_mask(mask_path)
+
     if not is_numpy:        
         anomaly_map = 0
         for i in range(len(ft_list)):
@@ -94,6 +107,20 @@ def cal_anomaly_maps(fs_list, ft_list, out_size, is_numpy=False):
         # anomaly_map[i] = gaussian_filter(anomaly_map[i], sigma=4)
         anomaly_map[i] = cv2.GaussianBlur(anomaly_map[i], ksize=(0, 0), sigmaX=4, sigmaY=4)
     
+    # 读取 mask 并调整大小
+    mask = cv2.resize(mask, (out_size, out_size), interpolation=cv2.INTER_NEAREST)
+
+    # 确保 mask 形状与 anomaly_map 匹配
+    if len(mask.shape) == 2:  # 如果 mask 是 (H, W)
+        mask = np.expand_dims(mask, axis=0)  # 变成 (1, H, W)
+        mask = np.repeat(mask, anomaly_map.shape[0], axis=0)  # 变成 (batch_size, H, W)
+
+    # 确保 mask 和 anomaly_map 形状一致
+    assert mask.shape == anomaly_map.shape, f"Mask shape {mask.shape} does not match anomaly_map shape {anomaly_map.shape}"
+
+    # 应用 mask
+    anomaly_map *= mask
+
     return anomaly_map
 
 def cal_anomaly_maps_score(fs_list, ft_list, out_size, is_numpy=False):
